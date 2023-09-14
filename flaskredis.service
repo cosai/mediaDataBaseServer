@@ -1,0 +1,17 @@
+# /etc/systemd/system/flaskredis.service
+[Unit]
+Description=Flask Redis Server
+#Description=Media Server
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/exampleRedisServer
+ExecStart=/usr/bin/python3 /home/ubuntu/exampleRedisServer/flaskRedis.py >> /home/ubuntu/exampleRedisServer/flaskRedis.log
+#ExecStart=/usr/bin/python3 /home/ubuntu/exampleRedisServer/mediaServer.py >> /home/ubuntu/exampleRedisServer/mediaServer.log
+
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

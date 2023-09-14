@@ -1,0 +1,325 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html style="height:100%">
+<head>
+<meta http-equiv="content-type" content="text/html; charset=UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/x-icon" href="{{ page_url }}images/logo.ico">
+<!-- .gmnoprint{display:none;}  -->
+<style>
+	.header{
+  		color: rgb(20,89,136);
+	}
+</style>
+<script type="text/javascript">
+    const DRAWPOLYGONENABLED=false;
+    const DRAWCAMERASENABLED=false;
+    const DRAWVCUSENABLED=false;	
+    const images={
+    	"person"	: String("{{ page_url }}images/BoundingPed2.png"),
+    	"car"	: String("{{ page_url }}images/BoundingCar2.png")
+    };
+    const defaultImage=String("{{ page_url }}images/BoundingCar2.png");
+    const redIconImage=String("{{ page_url }}images/red.png");
+    const vcuicon=String("{{ page_url }}images/vcu.png");
+    const CameraIconImage=String("{{ page_url }}images/cameraIcon.png");
+	
+    /*Array(137456.003,68728.002,34364.000,17182.000,8591.000,4295.500,2147.750,
+1073.875,536.937,268.468,134.234,67.117,33.558,16.779,8.389,4.194,2.0974,
+1.0487,0.524,0.262,0.131,0.0655);
+*/
+    var map=undefined;
+    var infoWindows={};
+
+    // Sets the map on all markers in the array.
+    var prev_marker_dict=[]; //this variable is not used or processed
+    const INTERVAL=33; //interval to refresh the screen/redraw the markers now 30 fps
+    var markers_dict=[];
+    const MAX_NUMBER_OF_MARKERS=50;
+    const MAX_NUMBER_OF_CAMERAS=100;
+    const MAX_NUMBER_OF_VCUS=50;
+    
+    var markers=[];
+    const lat_center_float=28.589446712158253;
+    const longitude_center_float=-81.19809151464855;
+    
+    var alldata=[];
+    
+    const origretryCount=5;
+    var cameraCoords=[]; // this is array of dictionaries that has longitude and latitude inside
+    var cameraPositions=[];// this is google markers array
+	
+    
+    var cameraRectangleCoords = [];
+    var polygonObjects=[];
+    
+    var vcuIPs={};
+    var currentVCUname="";
+    var vcupositions={};
+    
+    var ajaxSettingsSubscribe={
+	url: "{{ page_url }}subscribe",
+	type: "GET",
+	dataType: "json",
+	contentType : 'application/json',
+	retries     : 3,
+    };
+
+   var ajaxSettingsalldata={
+	url: "{{ page_url }}rsus",
+	type: "GET",
+	dataType: "json",
+	contentType : 'application/json',
+	retries     : 3,
+    };
+</script>
+<script type="text/javascript" src="{{ page_url }}js/jquery-3.6.2.min.js"></script>
+<script type="text/javascript" src="{{ page_url }}js/cameraSubscribe.js"></script>
+<script type="text/javascript" src="{{ page_url }}js/readAllData.js?v=6"></script>
+<script type="text/javascript">	
+function drawCircle(givenCenter,radiusgiven){
+	const cityCircle = new google.maps.Circle({
+		strokeColor: "#FF0000",
+		strokeOpacity: 0.005,
+		strokeWeight: 1,
+		fillColor: "#FF0000",
+		fillOpacity: 0.005,
+		map,
+		center: givenCenter,
+		radius: radiusgiven,
+	});		
+}
+	
+//ipaddressArray contains the ip addresses of some certain vcu
+function getInfoViewInside(ipaddressArray) {
+	let sum="";
+	for (var i = 0; i < ipaddressArray.length; i++) {
+    		let camframe="<iframe src=\""+ipaddressArray[i]+"\" style=\"height: 320px;width: 320px;\"></iframe>";	
+                sum=sum+camframe;	
+	}
+	return sum;
+}
+	
+function updateMarkers() {
+    subscribeUpdate();
+    if (typeof markers_dict !== 'undefined') {
+        if (markers_dict.length > 0) {
+            for (var i = 0; i < markers_dict.length; i++) {
+                if (markers_dict[i] != null && typeof markers_dict[i] !== "undefined") {
+                    move_marker(i, markers_dict[i]['latitude'], markers_dict[i]['longitude']);
+                }
+            }
+
+            for (let j = markers_dict.length; j < MAX_NUMBER_OF_MARKERS; j++) {
+                markers[j].setMap(null);
+                //we made the marker invisible
+            }
+        }
+
+    } else {
+        console.log("UNDEFINED MARKER DICTIONARY");
+        console.log(typeof markers);
+    }
+	
+    alldataUpdate();
+    let cameranumber=0;
+    //str = JSON.stringify(alldata, null, 4); // (Optional) beautiful indented output.
+    //console.log(str); 
+    for (let rsuid in alldata) {
+	    var rsuobj=	alldata[rsuid];
+	    currentVCUname=rsuid;
+	    //feedsUpdate();//getting vcu IPs, using currentVCUname variable
+	    
+	    let latitude=0;
+	    let longitude=0;
+	    let ipAddressArr=[];
+	    for (let sensorid in rsuobj) {
+		var sensorobj=rsuobj[sensorid];
+		if(sensorobj["IP"] !== undefined){
+		    ipAddressArr.push(sensorobj["IP"]);
+	        }
+	    
+		if(DRAWCAMERASENABLED){
+			latitude=sensorobj["latitude"];
+			longitude=sensorobj["longitude"]; 
+			var rotation=parseFloat(sensorobj["rotation"]); 
+			//console.log(cameranumber+"   -   "+ latitude+"   -   "+ longitude+"   -   "+ rotation)
+			move_camera_marker(cameranumber, latitude, longitude, rotation);
+	    	}
+		if(DRAWPOLYGONENABLED){
+			var rectcoords=sensorobj["rectangle_coordinates"];
+		        drawPolygon(rectcoords, cameranumber);
+			cameranumber++;
+		}	        
+	    }
+	    //we finished drawing cameras now drawing vcus
+	    
+	    if(DRAWVCUSENABLED && vcuIPs[currentVCUname]!== undefined && vcuIPs[currentVCUname]!=""){
+		infoWindows[currentVCUname] = new google.maps.InfoWindow();
+		iframeinside = getInfoViewInside(ipAddressArr);
+              	infoWindows[currentVCUname].setContent(iframeinside);
+		    
+		if (vcupositions[currentVCUname] === undefined){
+			// if there was no marker before we will create the marker
+			let t_marker = new google.maps.Marker({
+            		map: map,
+            		optimized: false,
+            		zIndex: 99999999,
+	    		icon:vcuicon,
+            		position: new google.maps.LatLng(latitude, longitude) //,'opacity': 0.5  //,icon:IconZoomObject("car")
+        		});
+			vcupositions[currentVCUname]=t_marker; 
+		}else{
+			vcupositions[currentVCUname].setPosition(new google.maps.LatLng(latitude, longitude));
+		}
+		   
+		
+        	google.maps.event.addListener(vcupositions[currentVCUname], 'click', function(){ 
+			infoWindows[currentVCUname].open(map, vcupositions[currentVCUname]);
+		});
+		    
+	    }else if(vcuIPs[currentVCUname]!== undefined){
+		//if if doesnt exist for VCU dont draw it delete it if drawn previously 
+		//it is not undefined but probably empty
+		vcupositions[currentVCUname].setMap(null);
+		vcupositions.delete(currentVCUname);    
+	    }else if(vcuIPs[currentVCUname]!== undefined){
+		vcupositions[currentVCUname].setMap(null);
+		vcupositions.delete(currentVCUname);    
+	    }
+		
+    }
+    
+    for (let j = cameranumber; j < MAX_NUMBER_OF_CAMERAS; j++) {
+         cameraPositions[j].setMap(null);
+         polygonObjects[j].setMap(null);
+         //we made the marker invisible
+    }
+    
+	
+    //let myLatLng = new google.maps.LatLng( lat_center_float, longitude_center_float );
+    //radiusgiven=10;
+    //drawCircle(myLatLng,radiusgiven);
+    window.setTimeout(updateMarkers, INTERVAL);
+
+}
+
+//if the tag name doesnt exist in images, this will return the default image	
+function getImageForTag(tagname) {
+    returnedVal = "";
+    if (images[tagname] !== undefined) {
+        returnedVal = String(images[tagname]);
+    } else {
+        returnedVal = defaultImage;
+    }
+    return returnedVal;
+}	
+	
+function zoomUpdate(m_pos) {
+    let zoom_level = map.getZoom();
+    let img_size = zoom_level * 2;
+    let class_coefficient = 1;
+    let class_name_str = markers_dict[m_pos]['label'];
+    // If the classified object is person show half the size
+    if (class_name_str == "person") {
+        class_coefficient = 2;
+    }
+
+    img_size = parseFloat(img_size / class_coefficient);
+    var icon_dict = {
+        "scaledSize": new google.maps.Size(img_size, img_size),
+        "anchor": new google.maps.Point(img_size / 2, img_size / 2),
+        "url": getImageForTag(class_name_str),
+    };
+
+    if (markers[m_pos] === undefined) {
+        alert("a marker is undefined markers size" + markers.length + " position " + m_pos + " dict_size " + markers_dict.length);
+        console.log(icon_dict);
+    }
+    if (icon_dict === undefined) {
+        alert("dict icon is undefined markers size" + markers.length + " position " + m_pos + " dict_size " + markers_dict.length);
+        console.log(icon_dict);
+    }
+    markers[m_pos].setIcon(icon_dict);
+
+}
+
+function initMap() {
+    let myLatLng = new google.maps.LatLng(lat_center_float, longitude_center_float);
+
+    radiusgiven = 10;
+    drawCircle(myLatLng, radiusgiven);
+    map = new google.maps.Map(document.getElementById('map'), {
+        zoom: 20,
+        center: myLatLng,
+        //mapTypeId: google.maps.MapTypeId.ROADMAP
+        mapTypeId: 'satellite', //'roadmap',
+        tilt: 0,
+    });
+
+    //we are creating the markers as p. That is not important
+    for (let count = 0; count < MAX_NUMBER_OF_MARKERS; count++) {
+        let t_marker = new google.maps.Marker({
+            map: null,
+            optimized: false,
+            position: myLatLng //,'opacity': 0.5  //,icon:IconZoomObject("car")
+        });
+        markers.push(t_marker);
+    }
+
+    for (let count = 0; count < MAX_NUMBER_OF_CAMERAS; count++) {
+        let t_marker = new google.maps.Marker({
+            map: null,
+            optimized: false,
+            zIndex: 99999999,
+            position: myLatLng //,'opacity': 0.5  //,icon:IconZoomObject("car")
+        });
+        cameraPositions.push(t_marker); 
+    
+    }
+    /*
+    for(let count=0; count < MAX_NUMBER_OF_VCUS; count++){
+	let t_marker = new google.maps.Marker({
+            map: null,
+            optimized: false,
+            zIndex: 99999999,
+	    icon:vcuicon,
+            position: myLatLng //,'opacity': 0.5  //,icon:IconZoomObject("car")
+        });
+	vcupositions.push(t_marker);    
+	infoWindows[count] = new google.maps.InfoWindow();
+        google.maps.event.addListener(t_marker, 'click', function(){ infoWindows[count].open(map, t_marker); });    
+    }*/
+	
+    //drawing camera ploygons
+    for (let count = 0; count < MAX_NUMBER_OF_CAMERAS; count++) {
+        let t_polygon = new google.maps.Polygon({
+            map: null
+        });
+        polygonObjects.push(t_polygon);
+    }
+
+
+    google.maps.event.addListener(map, "zoom_changed",
+        function() {
+            for (var i = 0; i < markers_dict.length; i++) {
+                //let class_name=markers_dict[i]['label'];
+                //markers[i].setIcon(IconZoomObject(class_name));
+                zoomUpdate(i);
+            }
+            for (var i = 0; i < cameraCoords.length; i++) {
+                zoomUpdateCameras(i);
+            }
+        });
+
+    updateMarkers();
+}
+</script>
+<!--script async="false" defer src="https://maps.googleapis.com/maps/api/js?key=apikey&callback=initMap"></script-->
+</head>
+<body style="height:95%;margin:0">
+        <h1 class="header"><img src="{{ page_url }}images/logo.png" style="width: 3rem;" />demo monitoring</h1>
+        <div id="messagediv"></div>
+        <div id="map" style="width: 100%; height: 96%;"></div>
+<script async="false" defer src="https://maps.googleapis.com/maps/api/js?key=apikey&callback=initMap"></script>
+</body>
+</html>
